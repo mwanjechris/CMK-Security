@@ -90,10 +90,7 @@ class _AppLockerScreenState extends ConsumerState<AppLockerScreen> {
 
                 return ListView.builder(
                   itemCount: filtered.length,
-                  itemBuilder: (context, i) {
-                    final app = filtered[i];
-                    return _AppTile(app: app);
-                  },
+                  itemBuilder: (context, i) => _AppTile(app: filtered[i]),
                 );
               },
             ),
@@ -106,7 +103,6 @@ class _AppLockerScreenState extends ConsumerState<AppLockerScreen> {
 
 class _AppTile extends ConsumerWidget {
   final InstalledApp app;
-
   const _AppTile({required this.app});
 
   @override
@@ -136,26 +132,30 @@ class _AppTile extends ConsumerWidget {
             fontSize: 15,
           ),
         ),
-        subtitle: Text(
-          app.packageName,
-          style: const TextStyle(color: Color(0xFF555577), fontSize: 11),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        subtitle: isHidden
+            ? const Text(
+                'In Vault — remove icon manually from home screen',
+                style: TextStyle(color: AppTheme.warning, fontSize: 11),
+              )
+            : Text(
+                app.packageName,
+                style: const TextStyle(color: Color(0xFF555577), fontSize: 11),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isLocked) ...[
+            if (isLocked)
               IconButton(
-                onPressed: () => notifier.toggleHidden(app.packageName),
-                tooltip: isHidden ? 'Show icon' : 'Hide icon',
+                onPressed: () => _toggleHidden(context, ref, isHidden),
+                tooltip: isHidden ? 'Show in launcher' : 'Move to Vault',
                 icon: Icon(
-                  isHidden ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  isHidden ? Icons.visibility_off_rounded : Icons.inventory_2_outlined,
                   color: isHidden ? AppTheme.warning : const Color(0xFF666688),
                   size: 20,
                 ),
               ),
-            ],
             Switch(
               value: isLocked,
               onChanged: (_) async {
@@ -163,6 +163,7 @@ class _AppTile extends ConsumerWidget {
                   await notifier.unlockApp(app.packageName);
                 } else {
                   await notifier.lockApp(app.packageName, app.appName);
+                  _showLockServiceReminder(context);
                 }
               },
             ),
@@ -171,11 +172,156 @@ class _AppTile extends ConsumerWidget {
       ),
     );
   }
+
+  void _showLockServiceReminder(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('App locked. Grant Usage Access & Overlay permissions for the lock screen to appear.'),
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _toggleHidden(BuildContext context, WidgetRef ref, bool currentlyHidden) {
+    final notifier = ref.read(lockedAppsProvider.notifier);
+    if (currentlyHidden) {
+      // Un-hiding
+      notifier.toggleHidden(app.packageName);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${app.appName} removed from Vault.')),
+      );
+    } else {
+      // Hiding — show instructions
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: AppTheme.surfaceVariant,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => _HideGuideSheet(app: app, notifier: notifier),
+      );
+    }
+  }
+}
+
+class _HideGuideSheet extends StatelessWidget {
+  final InstalledApp app;
+  final LockedAppsNotifier notifier;
+
+  const _HideGuideSheet({required this.app, required this.notifier});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.inventory_2_rounded, color: AppTheme.primary, size: 28),
+              const SizedBox(width: 12),
+              Text(
+                'Move "${app.appName}" to Vault',
+                style: const TextStyle(
+                  color: AppTheme.onBackground,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Android does not allow third-party apps to hide icons from your launcher. Here\'s how to do it manually:',
+            style: TextStyle(color: Color(0xFF888899), fontSize: 14, height: 1.5),
+          ),
+          const SizedBox(height: 16),
+          _Step(number: '1', text: 'Long-press the app icon on your home screen'),
+          _Step(number: '2', text: 'Tap "Remove" or drag it to the trash (this only hides it from home screen, the app still works)'),
+          _Step(number: '3', text: 'Access the app anytime through CMK Security → Vault'),
+          const SizedBox(height: 20),
+          const Text(
+            'Tap "Move to Vault" below to track this app in your CMK Security Vault.',
+            style: TextStyle(color: Color(0xFF666688), fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    notifier.toggleHidden(app.packageName);
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('${app.appName} is now in your Vault.'),
+                        backgroundColor: AppTheme.success,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.inventory_2_rounded, size: 18),
+                  label: const Text('Move to Vault'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _Step extends StatelessWidget {
+  final String number;
+  final String text;
+  const _Step({required this.number, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: const BoxDecoration(
+              color: AppTheme.primary,
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                number,
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: AppTheme.onSurface, fontSize: 13, height: 1.4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AppIcon extends StatelessWidget {
   final List<int>? iconBytes;
-
   const _AppIcon({this.iconBytes});
 
   @override

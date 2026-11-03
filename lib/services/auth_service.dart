@@ -2,13 +2,15 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:local_auth/local_auth.dart';
 import '../models/lock_type.dart';
+import 'platform_service.dart';
 import 'storage_service.dart';
 
 class AuthService {
   final StorageService _storage;
+  final PlatformService _platform;
   final LocalAuthentication _localAuth = LocalAuthentication();
 
-  AuthService(this._storage);
+  AuthService(this._storage, this._platform);
 
   String _hash(String input) {
     final bytes = utf8.encode(input);
@@ -17,7 +19,10 @@ class AuthService {
 
   // ── PIN ───────────────────────────────────────────────────
   Future<void> setPin(String pin) async {
-    await _storage.savePin(_hash(pin));
+    final hash = _hash(pin);
+    await _storage.savePin(hash);
+    // Write to native prefs so NativeLockScreenActivity can validate
+    await _platform.setLockCredentials('pin', hash);
   }
 
   Future<bool> verifyPin(String pin) async {
@@ -29,7 +34,9 @@ class AuthService {
   // ── Pattern ───────────────────────────────────────────────
   Future<void> setPattern(List<int> pattern) async {
     final key = pattern.join('-');
-    await _storage.savePattern(_hash(key));
+    final hash = _hash(key);
+    await _storage.savePattern(hash);
+    await _platform.setLockCredentials('pattern', hash);
   }
 
   Future<bool> verifyPattern(List<int> pattern) async {
@@ -40,6 +47,11 @@ class AuthService {
   }
 
   // ── Biometric ─────────────────────────────────────────────
+  Future<void> setBiometric() async {
+    // For biometric, we store a sentinel hash; actual auth is done by the OS
+    await _platform.setLockCredentials('biometric', 'biometric_enabled');
+  }
+
   Future<bool> isBiometricAvailable() async {
     try {
       final canCheck = await _localAuth.canCheckBiometrics;
@@ -47,14 +59,6 @@ class AuthService {
       return canCheck && isAvailable;
     } catch (_) {
       return false;
-    }
-  }
-
-  Future<List<BiometricType>> getAvailableBiometrics() async {
-    try {
-      return await _localAuth.getAvailableBiometrics();
-    } catch (_) {
-      return [];
     }
   }
 
@@ -85,4 +89,7 @@ class AuthService {
         return authenticateWithBiometric();
     }
   }
+
+  String hashPin(String pin) => _hash(pin);
+  String hashPattern(List<int> pattern) => _hash(pattern.join('-'));
 }

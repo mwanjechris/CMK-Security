@@ -24,6 +24,8 @@ class AppConstants {
   static const String methodHasOverlayPermission = 'hasOverlayPermission';
   static const String methodRequestOverlayPermission = 'requestOverlayPermission';
   static const String methodGetAppIcon = 'getAppIcon';
+  static const String methodSetLockCredentials = 'setLockCredentials';
+  static const String methodNotifyAuthSuccess = 'notifyAuthSuccess';
 
   // PIN settings
   static const int pinMinLength = 4;

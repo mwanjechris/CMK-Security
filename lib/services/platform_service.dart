@@ -20,19 +20,6 @@ class PlatformService {
     }
   }
 
-  Future<Uint8List?> getAppIcon(String packageName) async {
-    try {
-      final List<dynamic>? bytes = await _channel.invokeMethod(
-        AppConstants.methodGetAppIcon,
-        {'packageName': packageName},
-      );
-      if (bytes == null) return null;
-      return Uint8List.fromList(bytes.cast<int>());
-    } on PlatformException {
-      return null;
-    }
-  }
-
   Future<void> launchApp(String packageName) async {
     try {
       await _channel.invokeMethod(
@@ -82,17 +69,13 @@ class PlatformService {
         AppConstants.methodStartMonitor,
         {'packages': lockedPackages},
       );
-    } on PlatformException {
-      rethrow;
-    }
+    } on PlatformException catch (_) {}
   }
 
   Future<void> stopMonitorService() async {
     try {
       await _channel.invokeMethod(AppConstants.methodStopMonitor);
-    } on PlatformException {
-      rethrow;
-    }
+    } on PlatformException catch (_) {}
   }
 
   Future<void> updateLockedApps(List<String> lockedPackages) async {
@@ -101,8 +84,27 @@ class PlatformService {
         AppConstants.methodUpdateLockedApps,
         {'packages': lockedPackages},
       );
-    } on PlatformException {
-      rethrow;
-    }
+    } on PlatformException catch (_) {}
+  }
+
+  // Write lock credentials to native SharedPreferences so the
+  // NativeLockScreenActivity can validate auth without Flutter engine
+  Future<void> setLockCredentials(String lockType, String hash) async {
+    try {
+      await _channel.invokeMethod(
+        AppConstants.methodSetLockCredentials,
+        {'lockType': lockType, 'hash': hash},
+      );
+    } on PlatformException catch (_) {}
+  }
+
+  // Signal the native lock screen that auth succeeded for this package
+  Future<void> notifyAuthSuccess(String packageName) async {
+    try {
+      await _channel.invokeMethod(
+        AppConstants.methodNotifyAuthSuccess,
+        {'packageName': packageName},
+      );
+    } on PlatformException catch (_) {}
   }
 }

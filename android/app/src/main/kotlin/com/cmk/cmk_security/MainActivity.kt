@@ -22,6 +22,15 @@ class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.cmk.cmk_security/app_lock"
 
+    override fun onResume() {
+        super.onResume()
+        // Restart monitor service on app resume if there are locked apps
+        val locked = AppMonitorService.getLockedApps(this)
+        if (locked.isNotEmpty()) {
+            AppMonitorService.start(this, locked.toList())
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -36,51 +45,31 @@ class MainActivity : FlutterActivity() {
                 }
                 "getAppIcon" -> {
                     val packageName = call.argument<String>("packageName")
-                    if (packageName == null) {
-                        result.error("NULL_ARG", "packageName is null", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        result.success(getAppIconBytes(packageName))
-                    } catch (e: Exception) {
-                        result.success(null)
-                    }
+                    if (packageName == null) { result.error("NULL_ARG", "packageName is null", null); return@setMethodCallHandler }
+                    result.success(getAppIconBytes(packageName))
                 }
                 "launchApp" -> {
                     val packageName = call.argument<String>("packageName")
-                    if (packageName == null) {
-                        result.error("NULL_ARG", "packageName is null", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-                        if (launchIntent != null) {
-                            startActivity(launchIntent)
-                            result.success(true)
-                        } else {
-                            result.error("NOT_FOUND", "App not found: $packageName", null)
-                        }
-                    } catch (e: Exception) {
-                        result.error("ERROR", e.message, null)
+                    if (packageName == null) { result.error("NULL_ARG", "packageName is null", null); return@setMethodCallHandler }
+                    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                    if (launchIntent != null) {
+                        startActivity(launchIntent)
+                        result.success(true)
+                    } else {
+                        result.error("NOT_FOUND", "App not found: $packageName", null)
                     }
                 }
-                "hasUsagePermission" -> {
-                    result.success(hasUsageStatsPermission())
-                }
+                "hasUsagePermission" -> result.success(hasUsageStatsPermission())
                 "requestUsagePermission" -> {
-                    val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                    startActivity(intent)
+                    startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                     result.success(null)
                 }
-                "hasOverlayPermission" -> {
-                    result.success(Settings.canDrawOverlays(this))
-                }
+                "hasOverlayPermission" -> result.success(Settings.canDrawOverlays(this))
                 "requestOverlayPermission" -> {
-                    val intent = Intent(
+                    startActivity(Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
+                    ))
                     result.success(null)
                 }
                 "startMonitorService" -> {
@@ -95,6 +84,27 @@ class MainActivity : FlutterActivity() {
                 "updateLockedApps" -> {
                     val packages = call.argument<List<String>>("packages") ?: emptyList()
                     AppMonitorService.updateLockedApps(this, packages)
+                    result.success(true)
+                }
+                // Called from Flutter after PIN/pattern is configured
+                "setLockCredentials" -> {
+                    val lockType = call.argument<String>("lockType") ?: ""
+                    val hash = call.argument<String>("hash") ?: ""
+                    val prefs = getSharedPreferences(
+                        NativeLockScreenActivity.PREFS_NAME, Context.MODE_PRIVATE
+                    )
+                    prefs.edit()
+                        .putString(NativeLockScreenActivity.KEY_LOCK_TYPE, lockType)
+                        .putString(NativeLockScreenActivity.KEY_LOCK_HASH, hash)
+                        .apply()
+                    result.success(true)
+                }
+                // Called from Flutter after successful auth (session unlock)
+                "notifyAuthSuccess" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        AppMonitorService.sessionUnlock(packageName)
+                    }
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -153,18 +163,10 @@ class MainActivity : FlutterActivity() {
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
         val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                packageName
-            )
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
         } else {
             @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                packageName
-            )
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
         }
         return mode == AppOpsManager.MODE_ALLOWED
     }

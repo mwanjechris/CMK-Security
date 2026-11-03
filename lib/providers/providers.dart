@@ -10,11 +10,14 @@ import '../services/storage_service.dart';
 // ── Service providers ──────────────────────────────────────
 final storageServiceProvider = Provider<StorageService>((_) => StorageService());
 
-final authServiceProvider = Provider<AuthService>((ref) {
-  return AuthService(ref.read(storageServiceProvider));
-});
-
 final platformServiceProvider = Provider<PlatformService>((_) => PlatformService());
+
+final authServiceProvider = Provider<AuthService>((ref) {
+  return AuthService(
+    ref.read(storageServiceProvider),
+    ref.read(platformServiceProvider),
+  );
+});
 
 final fileVaultServiceProvider = Provider<FileVaultService>((ref) {
   return FileVaultService(ref.read(storageServiceProvider));
@@ -69,16 +72,25 @@ class LockedAppsNotifier extends StateNotifier<AsyncValue<List<LockedApp>>> {
   }
 
   Future<void> _load() async {
-    state = AsyncValue.data(await _storage.getLockedApps());
+    final apps = await _storage.getLockedApps();
+    state = AsyncValue.data(apps);
+    // Auto-start the monitor service if there are already locked apps
+    if (apps.isNotEmpty) {
+      await _platform.startMonitorService(apps.map((a) => a.packageName).toList());
+    }
   }
 
   Future<void> lockApp(String packageName, String appName) async {
     final current = state.valueOrNull ?? [];
     if (current.any((a) => a.packageName == packageName)) return;
-    final updated = [...current, LockedApp(packageName: packageName, appName: appName, lockedAt: DateTime.now())];
+    final updated = [
+      ...current,
+      LockedApp(packageName: packageName, appName: appName, lockedAt: DateTime.now()),
+    ];
     await _storage.saveLockedApps(updated);
     state = AsyncValue.data(updated);
-    await _syncWithService(updated);
+    // Always start (or update) the monitor service
+    await _platform.startMonitorService(updated.map((a) => a.packageName).toList());
   }
 
   Future<void> unlockApp(String packageName) async {
@@ -86,7 +98,11 @@ class LockedAppsNotifier extends StateNotifier<AsyncValue<List<LockedApp>>> {
     final updated = current.where((a) => a.packageName != packageName).toList();
     await _storage.saveLockedApps(updated);
     state = AsyncValue.data(updated);
-    await _syncWithService(updated);
+    if (updated.isEmpty) {
+      await _platform.stopMonitorService();
+    } else {
+      await _platform.startMonitorService(updated.map((a) => a.packageName).toList());
+    }
   }
 
   Future<void> toggleHidden(String packageName) async {
@@ -97,12 +113,6 @@ class LockedAppsNotifier extends StateNotifier<AsyncValue<List<LockedApp>>> {
     }).toList();
     await _storage.saveLockedApps(updated);
     state = AsyncValue.data(updated);
-  }
-
-  Future<void> _syncWithService(List<LockedApp> apps) async {
-    try {
-      await _platform.updateLockedApps(apps.map((a) => a.packageName).toList());
-    } catch (_) {}
   }
 
   bool isLocked(String packageName) {

@@ -92,6 +92,7 @@ class SetupScreen extends ConsumerWidget {
       );
       return;
     }
+    await auth.setBiometric();
     await ref.read(lockTypeProvider.notifier).setLockType(LockType.biometric);
     final storage = ref.read(storageServiceProvider);
     await storage.markSetupComplete();

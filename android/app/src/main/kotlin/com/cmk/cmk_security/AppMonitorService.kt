@@ -8,7 +8,6 @@ import android.app.Service
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -24,7 +23,19 @@ class AppMonitorService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val PREF_NAME = "cmk_locked_apps"
         private const val PREF_KEY = "locked_packages"
-        private const val CHECK_INTERVAL_MS = 500L
+        private const val CHECK_INTERVAL_MS = 400L
+        // Session: once the user authenticates, allow access for this duration
+        private const val SESSION_DURATION_MS = 5 * 60 * 1000L  // 5 minutes
+
+        @Volatile private var sessionUnlockedPackage: String? = null
+        @Volatile private var sessionUnlockTime = 0L
+        @Volatile private var lastForeground: String? = null
+
+        fun sessionUnlock(pkg: String) {
+            sessionUnlockedPackage = pkg
+            sessionUnlockTime = System.currentTimeMillis()
+            Log.d(TAG, "Session unlocked: $pkg")
+        }
 
         fun start(context: Context, lockedPackages: List<String>) {
             saveLockedApps(context, lockedPackages)
@@ -47,6 +58,7 @@ class AppMonitorService : Service() {
         private fun saveLockedApps(context: Context, packages: List<String>) {
             val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             prefs.edit().putStringSet(PREF_KEY, packages.toSet()).apply()
+            Log.d(TAG, "Locked apps updated: $packages")
         }
 
         fun getLockedApps(context: Context): Set<String> {
@@ -56,8 +68,7 @@ class AppMonitorService : Service() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var lastLockedPackage: String? = null
-    private var lastDetectionTime = 0L
+    private var lockCooldown = mutableMapOf<String, Long>()
 
     private val monitorRunnable = object : Runnable {
         override fun run() {
@@ -90,19 +101,30 @@ class AppMonitorService : Service() {
         val foregroundPkg = getForegroundApp() ?: return
         if (foregroundPkg == packageName) return
 
-        val lockedApps = getLockedApps(this)
-        if (foregroundPkg in lockedApps) {
-            val now = System.currentTimeMillis()
-            // Debounce: don't re-trigger if same app locked < 3s ago
-            if (foregroundPkg == lastLockedPackage && now - lastDetectionTime < 3000) return
-
-            lastLockedPackage = foregroundPkg
-            lastDetectionTime = now
-            Log.d(TAG, "Locked app detected: $foregroundPkg")
-            showLockScreen(foregroundPkg)
-        } else {
-            lastLockedPackage = null
+        // When user switched away from the session-unlocked app, clear the session
+        if (lastForeground != foregroundPkg && sessionUnlockedPackage == lastForeground) {
+            Log.d(TAG, "App changed, clearing session for $sessionUnlockedPackage")
+            sessionUnlockedPackage = null
+            sessionUnlockTime = 0L
         }
+        lastForeground = foregroundPkg
+
+        val lockedApps = getLockedApps(this)
+        if (foregroundPkg !in lockedApps) return
+
+        // Check session unlock (still valid within window)
+        val now = System.currentTimeMillis()
+        if (sessionUnlockedPackage == foregroundPkg && now - sessionUnlockTime < SESSION_DURATION_MS) {
+            return
+        }
+
+        // Debounce: don't spam lock screens
+        val lastLock = lockCooldown[foregroundPkg] ?: 0L
+        if (now - lastLock < 2000L) return
+
+        lockCooldown[foregroundPkg] = now
+        Log.d(TAG, "Locked app in foreground: $foregroundPkg — showing lock screen")
+        NativeLockScreenActivity.start(this, foregroundPkg)
     }
 
     private fun getForegroundApp(): String? {
@@ -111,37 +133,27 @@ class AppMonitorService : Service() {
             val now = System.currentTimeMillis()
             val stats = usm.queryUsageStats(
                 UsageStatsManager.INTERVAL_DAILY,
-                now - 10000,
+                now - 30000L,
                 now
             )
             stats?.maxByOrNull { it.lastTimeUsed }?.packageName
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting foreground app", e)
+            Log.e(TAG, "Error getting foreground app: ${e.message}")
             null
         }
-    }
-
-    private fun showLockScreen(lockedPackage: String) {
-        val intent = Intent(this, LockOverlayActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            putExtra("locked_package", lockedPackage)
-        }
-        startActivity(intent)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "CMK Security Monitor",
+                "CMK Security",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Monitoring locked apps"
+                description = "Protecting your locked apps"
                 setShowBadge(false)
             }
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
 
@@ -153,7 +165,7 @@ class AppMonitorService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CMK Security")
-            .setContentText("Protecting your apps")
+            .setContentText("App protection active")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pi)
             .setOngoing(true)
